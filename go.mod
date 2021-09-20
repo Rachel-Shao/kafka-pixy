@@ -7,6 +7,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/fatih/structs v1.1.0 // indirect
 	github.com/go-ini/ini v1.46.0 // indirect
+	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gorilla/mux v1.8.0
 	github.com/mailgun/holster/v4 v4.0.0
 	github.com/mailru/easyjson v0.0.0-20190626092158-b2ccc519800e

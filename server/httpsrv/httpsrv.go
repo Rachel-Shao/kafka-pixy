@@ -2,9 +2,11 @@ package httpsrv
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	_ "github.com/go-sql-driver/mysql"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Shopify/sarama"
 	"github.com/gorilla/mux"
@@ -218,6 +221,14 @@ func (s *T) handleProduce(w http.ResponseWriter, r *http.Request) {
 				Value: decoded,
 			})
 		}
+	}
+
+	// Save the message to mySQL
+	fmt.Printf("[sxy] start to save to mysql")
+	if err := saveToMysql(r); err != nil{
+		errorText := fmt.Sprintf("Failed to save message to mySQL: %v", err)
+		s.respondWithJSON(w, http.StatusInternalServerError, errorRs{errorText})
+		return
 	}
 
 	// Asynchronously submit the message to the Kafka cluster.
@@ -767,4 +778,134 @@ func newTopicMetadataView(withPartitions, withConfig bool, tm admin.TopicMetadat
 		topicMetadataView.Config = &topicConfig
 	}
 	return topicMetadataView
+}
+
+const (
+	SQLADDR = "root:Ab123456@tcp(127.0.0.1:30336)/"
+	SHANGQIDATABASE = "shangqi"
+)
+
+type deviceLatestData struct {
+	id int
+	clusterId string
+	namespace string
+	deviceName string
+	propertyName string
+	propertyValue string
+	createTime time.Time
+	updateTime time.Time
+	deletedAt time.Time
+}
+
+type DbWorker struct {
+	//mysql data source name
+	Dsn string
+}
+
+func connectSql() *sql.DB {
+	dbw := DbWorker{
+		Dsn: SQLADDR + SHANGQIDATABASE + "?charset=utf8&parseTime=true",
+	}
+	db, err := sql.Open("mysql", dbw.Dsn)
+	if err != nil {
+		panic(err)
+		return nil
+	}
+	//defer db.Close()
+	return db
+}
+
+func saveToMysql(req *http.Request) error {
+	// get info
+	var deviceLatestData = &deviceLatestData{}
+	if req.Body != nil {
+		body, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			return err
+		}
+		if err = json.Unmarshal(body, &deviceLatestData); err != nil {
+			return err
+		}
+		fmt.Printf("[sxy] get data from req: %v", deviceLatestData)
+	}
+
+	// save data to mySql
+	db := connectSql()
+	if isExist := queryData(db, deviceLatestData.id); isExist == true {
+		// update
+		updateData(db, *deviceLatestData)
+		fmt.Printf("[sxy] update success")
+	}
+	// insert
+	insertData(db, *deviceLatestData)
+	fmt.Printf("[sxy] insert success")
+	return nil
+}
+
+func queryData(db *sql.DB, queryId int) bool {
+	rows, err := db.Query("SELECT * FROM device_latest_data")
+	defer rows.Close()
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	var id int
+	var clusterId string
+	var namespace string
+	var deviceName string
+	var propertyName string
+	var propertyValue string
+	var createTime time.Time
+	var updateTime time.Time
+	var deletedAt time.Time
+	for rows.Next() {
+		err = rows.Scan(&id, &clusterId, &namespace, &deviceName, &propertyName, &propertyValue, &createTime, &updateTime, &deletedAt)
+		if err != nil {
+			fmt.Println(err)
+			panic(err)
+		}
+		if id == queryId {
+			return true
+		}
+	}
+	return false
+}
+
+
+func insertData(db *sql.DB, data deviceLatestData) {
+	stmt, err := db.Prepare("INSERT Into device_latest_data (id, clusterId, namespace, device_name, property_name, property_value, create_time, update_time, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	res, err := stmt.Exec(data.id, data.clusterId, data.namespace, data.deviceName, data.propertyName, data.propertyValue, data.createTime, data.updateTime, data.deletedAt)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	if LastInsertId, err := res.LastInsertId(); err != nil {
+		fmt.Println("LastInsertId:", LastInsertId)
+	}
+	stmt.Close()
+}
+
+
+func updateData(db *sql.DB, data deviceLatestData) {
+	stmt, err := db.Prepare("UPDATE device_latest_data SET id=?, clusterId=?, namespace=?, device_name=?, property_name=?, property_value=?, create_time=?, update_time=?, deleted_at=? WHERE id=?")
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	res, err := stmt.Exec(data.id, data.clusterId, data.namespace, data.deviceName, data.propertyName, data.propertyValue, data.createTime, data.updateTime, data.deletedAt, data.id)
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	num, err := res.RowsAffected()
+	if err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+	fmt.Println(num)
+	stmt.Close()
 }
